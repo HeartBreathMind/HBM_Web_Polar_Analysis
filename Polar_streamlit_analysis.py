@@ -150,7 +150,7 @@ def analyze_rr_chunks(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, chunk_
             results.append(analyze_rr_session(chunk, fs, lf_hf_thresh, acute_lf_hf_thresh, start_time= i * chunk_duration, end_time= int(np.ceil(min((i + 1) * chunk_duration, sum(rr_intervals)/60000)))))
     return results
 
-def plot_hr_with_sympathetic(rr_intervals, results):
+def plot_hr_with_sympathetic(rr_intervals, results, chunks= False):
     hr = calculate_heart_rate(rr_intervals)
     time = np.arange(len(hr)) / 60  # Convert to minutes
 
@@ -169,31 +169,32 @@ def plot_hr_with_sympathetic(rr_intervals, results):
         height=400,
         title="Heart Rate with Sympathetic/Parasympathetic State"
     )
-
+    if chunks:
     # Overlay shaded regions for sympathetic/parasympathetic states
-    regions = []
-    for result in results:
-        start_time = int(result["Time"].split(" - ")[0])
-        end_time = int(result["Time"].split(" - ")[1])
-        
-        if result["State"] == "Acute Sympathetic":
-            color = 'red'
-        elif result["State"] == "Sympathetic":
-            color = 'orange'
-        else:
-            color = 'green'
+        regions = []
+        for result in results:
+            start_time = int(result["Time"].split(" - ")[0])
+            end_time = int(result["Time"].split(" - ")[1])
+            
+            if result["State"] == "Acute Sympathetic":
+                color = 'red'
+            elif result["State"] == "Sympathetic":
+                color = 'orange'
+            else:
+                color = 'green'
 
-        region = alt.Chart(pd.DataFrame({
-            'start': [start_time],
-            'end': [end_time]
-        })).mark_rect(opacity=0.3, color=color).encode(
-            x='start:Q',
-            x2='end:Q'
-        )
-        regions.append(region)
-
-    # Combine the heart rate line and state regions
-    chart = base + alt.layer(*regions)
+            region = alt.Chart(pd.DataFrame({
+                'start': [start_time],
+                'end': [end_time]
+            })).mark_rect(opacity=0.3, color=color).encode(
+                x='start:Q',
+                x2='end:Q'
+            )
+            regions.append(region)
+        # Combine the heart rate line and state regions
+        chart = base + alt.layer(*regions)
+    else:
+        chart = base
 
     # Display the chart in Streamlit
     st.altair_chart(chart, use_container_width=True)
@@ -208,7 +209,6 @@ def session_analysis(file_path, chunk_duration= None, fs=4, lf_hf_thresh=1.8, ac
         chunk_analysis = analyze_rr_chunks(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, chunk_duration=chunk_duration)
         print(f"Analysis of chunks analysis: \n{pd.DataFrame(chunk_analysis)}\n")
         plot_hr_with_sympathetic(rr_intervals, chunk_analysis)
-
 
 def openai_response(prompt, model = "gpt-4o"):
     client = OpenAI(api_key= openai_api_key.replace('"',''))
@@ -231,14 +231,19 @@ def main():
         if rr_intervals is not None:
             st.success("File successfully uploaded and verified!")
             
+            fs = 4  # Sampling frequency for interpolation
+            lf_hf_thresh = 1.8
+            acute_lf_hf_thresh = 3.0
+            end_time = int(np.ceil(sum(rr_intervals)/60000))
+            analysis_results = analyze_rr_session(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, 0, end_time)
+            for i,j in analysis_results.items(): st.write(f"{i}: {j}")
+            plot_hr_with_sympathetic(rr_intervals, analysis_results, False)
+
             # Step 2: Get chunk duration from the user
             chunk_duration = st.number_input("Enter chunk duration (minutes)", min_value=1, max_value=60, value=5)
 
             if st.button("Run Analysis"):
                 # Step 3: Perform analysis and plot results
-                fs = 4  # Sampling frequency for interpolation
-                lf_hf_thresh = 1.8
-                acute_lf_hf_thresh = 3.0
 
                 st.write("Performing analysis...")
                 results = analyze_rr_chunks(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, chunk_duration)
@@ -247,8 +252,7 @@ def main():
 
                 # Step 4: Plot heart rate and sympathetic/parasympathetic states
                 st.write("Heart Rate with Sympathetic/Parasympathetic State:")
-                plot_hr_with_sympathetic(rr_intervals, results)
-                # st.write(pd.DataFrame(results))
+                plot_hr_with_sympathetic(rr_intervals, results, True)
                 for i, row in enumerate(results):
                     lf = row['LF Power']
                     hf = row['HF Power']
@@ -258,18 +262,6 @@ def main():
                     Based on this data, please provide a layman-friendly explanation of what this means and whether they're in a relaxed or stressed situation and the impact this has on decision making. I define a sympathetic state as one with a lf/hf ratio above 1.8 and an LF/HF ratio above 3 to be in acute sympathetic state. If they're in a sympathetic state, give a quick tip on how to bring themselves back into a parasympathetic state. Respond in one paragraph, avoiding technical jargon.
                     Do not explicitly call out the threshold values I provided. And address the reader as 'you'. Do not start with 'Based on the provided data' or similar
                     """
-                    # row["Time"]
-                    # row["Avg HR (bpm)"]
-                    # row["HR Range"]
-                    # row["SD1"]
-                    # row["SD2"]
-                    # row["RMSSD"]
-                    # row["SDNN"]
-                    # row["pNN50 (%)"]
-                    # row["LF Power"]
-                    # row["HF Power"]
-                    # row["LF/HF Ratio"]
-                    # row["State"]
                     for i,j in row.items():
                         print(i, j)
                         st.write(f"{i}: {j}")
