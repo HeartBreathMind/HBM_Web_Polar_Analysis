@@ -40,7 +40,7 @@ pydeck==0.9.1
 Pygments==2.18.0
 Pympler==1.1
 python-dateutil==2.9.0.post0
-pywin32==306
+pytz==2024.2
 referencing==0.35.1
 requests==2.32.3
 rich==13.8.1
