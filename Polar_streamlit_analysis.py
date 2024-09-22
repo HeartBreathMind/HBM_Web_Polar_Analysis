@@ -4,6 +4,10 @@ import numpy as np
 from scipy.signal import welch
 from scipy.interpolate import interp1d
 import altair as alt
+import plotly.express as px
+import plotly.graph_objects as go
+from openai import OpenAI
+openai_api_key = st.secrets["OPENAI_API_KEY"]
 
 # Function to load and verify RR intervals from the uploaded file
 def load_rr_intervals(file):
@@ -58,6 +62,48 @@ def calculate_rmssd(rr_intervals):
 
 def calculate_sdnn(rr_intervals):
     return np.std(rr_intervals)
+
+def hr_chart(hr_data, age):
+    max_hr = 220 - age
+    zones = {
+        'Below Zone 1': (0, 0.5 * max_hr),
+        'Zone 1': (0.5 * max_hr, 0.6 * max_hr),
+        'Zone 2': (0.6 * max_hr, 0.7 * max_hr),
+        'Zone 3': (0.7 * max_hr, 0.8 * max_hr),
+        'Zone 4': (0.8 * max_hr, 0.9 * max_hr),
+        'Zone 5': (0.9 * max_hr, max_hr),
+        'Above Zone 5': (max_hr, 220)
+    }
+    zone_colors = {
+        'Below Zone 1': '#00B050',
+        'Zone 1': '#FFE699',
+        'Zone 2': '#F4B183',
+        'Zone 3': '#C55A11',
+        'Zone 4': '#F36A53',
+        'Zone 5': '#FF0000',
+        'Above Zone 5': '#C00000'
+    }
+    fig = px.line(hr_data, x='Time', y='heart_rate', title='Heart Rate Over Time', labels={'Time': 'Time', 'heart_rate': 'Heart Rate'})
+    fig.update_traces(line=dict(color='blue'))
+    fig.update_xaxes(tickformat="%H:%M:%S", linecolor='black', mirror=True)
+    fig.update_yaxes(range=[0, 220], linecolor='black', mirror=True)
+    shapes = []
+    for zone_name, (low, high) in zones.items():
+        shapes.append(go.layout.Shape(
+            type="rect",
+            xref="paper", yref="y",
+            x0=0, x1=1, y0=low, y1=high,
+            fillcolor=zone_colors[zone_name], opacity=0.3,
+            layer="below", line=dict(width=0)
+        ))
+    fig.update_layout(
+        shapes=shapes,
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=40, r=40, t=40, b=40),
+        showlegend=False
+    )
+    st.plotly_chart(fig)
 
 def analyze_rr_session(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, start_time, end_time):
     avg_hr = np.mean(calculate_heart_rate(rr_intervals))
@@ -163,6 +209,15 @@ def session_analysis(file_path, chunk_duration= None, fs=4, lf_hf_thresh=1.8, ac
         print(f"Analysis of chunks analysis: \n{pd.DataFrame(chunk_analysis)}\n")
         plot_hr_with_sympathetic(rr_intervals, chunk_analysis)
 
+
+def openai_response(prompt, model = "gpt-4o"):
+    client = OpenAI(api_key= openai_api_key.replace('"',''))
+    response = client.chat.completions.create(
+        model= model,
+        messages=[ {"role": "user", "content": f"{prompt}"}]
+        )
+    return response.choices[0].message.content.strip()
+
 # Streamlit app
 def main():
     st.title("RR Interval Analysis Dashboard")
@@ -189,11 +244,36 @@ def main():
                 results = analyze_rr_chunks(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, chunk_duration)
 
                 st.write("Analysis Results:")
-                st.write(pd.DataFrame(results))
 
                 # Step 4: Plot heart rate and sympathetic/parasympathetic states
                 st.write("Heart Rate with Sympathetic/Parasympathetic State:")
                 plot_hr_with_sympathetic(rr_intervals, results)
+                # st.write(pd.DataFrame(results))
+                for i, row in enumerate(results):
+                    lf = row['LF Power']
+                    hf = row['HF Power']
+                    time = row['Time']
+                    prompt = f"""
+                    Here are the LF and HF and LF/HF ratio from the Frequency Domain Analysis of the RR Intervals for a session: {lf, hf, lf/hf}
+                    Based on this data, please provide a layman-friendly explanation of what this means and whether they're in a relaxed or stressed situation and the impact this has on decision making. I define a sympathetic state as one with a lf/hf ratio above 1.8 and an LF/HF ratio above 3 to be in acute sympathetic state. If they're in a sympathetic state, give a quick tip on how to bring themselves back into a parasympathetic state. Respond in one paragraph, avoiding technical jargon.
+                    Do not explicitly call out the threshold values I provided. And address the reader as 'you'. Do not start with 'Based on the provided data' or similar
+                    """
+                    # row["Time"]
+                    # row["Avg HR (bpm)"]
+                    # row["HR Range"]
+                    # row["SD1"]
+                    # row["SD2"]
+                    # row["RMSSD"]
+                    # row["SDNN"]
+                    # row["pNN50 (%)"]
+                    # row["LF Power"]
+                    # row["HF Power"]
+                    # row["LF/HF Ratio"]
+                    # row["State"]
+                    for i,j in row.items():
+                        print(i, j)
+                        st.write(f"{i}: {j}")
+                    st.write(f"Analysis: \n{openai_response(prompt)}\n")
                 
 if __name__ == '__main__':
     main()
