@@ -30,6 +30,114 @@ def calculate_heart_rate(rr_intervals):
     heart_rate_seconds = heart_rate_interpolator(time_seconds)
     return heart_rate_seconds  # HR in beats per minute
 
+def calculate_rmssd(rr_intervals):
+    rr_intervals = np.array(rr_intervals, dtype=np.float64)
+    # Remove nan values
+    rr_intervals = rr_intervals[~np.isnan(rr_intervals)]
+    if len(rr_intervals) < 2:
+        return np.nan
+    rr_diff = np.diff(rr_intervals)
+    rr_sqdiff = rr_diff ** 2
+    rmssd = np.sqrt(np.nanmean(rr_sqdiff))
+    return rmssd
+
+def calculate_sdnn(rr_intervals):
+    return np.std(rr_intervals)
+
+def calculate_pnn50(rr_intervals):
+    differences = np.abs(np.diff(rr_intervals))
+    count_nn50 = np.sum(differences > 50)  # Number of successive intervals that differ by more than 50 ms
+    pnn50 = (count_nn50 / len(differences)) * 100
+    return pnn50
+
+def calculate_sd1_sd2(rr_intervals):
+    sd1 = np.std(np.diff(rr_intervals) / np.sqrt(2))
+    sd2 = np.sqrt(2 * np.var(rr_intervals) - sd1**2)
+    return sd1, sd2
+
+def rolling_rmssd(rr_intervals, window_size=60, step_size=5):
+    intervals = np.array(rr_intervals)
+    # Convert RR intervals to R-peak times in seconds
+    r_peaks_times = np.cumsum(intervals) / 1000.0  # Convert to seconds
+    total_time = r_peaks_times[-1]
+    if total_time < window_size:
+        window_size = total_time
+    # Generate time points for rolling calculation
+    t0_list = np.arange(0, total_time - window_size + step_size, step_size)
+    times = []
+    rmssd_values = []
+    for t0 in t0_list:
+        t1 = t0 + window_size
+        # Find indices of RR intervals within the window
+        idx = np.where((r_peaks_times >= t0) & (r_peaks_times < t1))[0]
+        if len(idx) > 1:
+            # Extract the RR intervals in the window
+            rr_win = intervals[idx]
+            rmssd = calculate_rmssd(rr_win)
+            rmssd_values.append(rmssd)
+            times.append(t0 + window_size / 2.0)
+        else:
+            # Not enough data to compute RMSSD
+            rmssd_values.append(np.nan)
+            times.append(t0 + window_size / 2.0)
+    return times, rmssd_values
+
+def rolling_rmssd_summary(rmssd_values):
+    rolling_rmssd_summary = {
+        'mean': np.mean(rmssd_values),
+        'min': np.nanpercentile(rmssd_values, 5),
+        '25%': np.nanpercentile(rmssd_values, 25),
+        '50%': np.nanpercentile(rmssd_values, 50),
+        '75%': np.nanpercentile(rmssd_values, 75),
+        'max': np.nanpercentile(rmssd_values, 95),
+    }
+    return rolling_rmssd_summary
+
+def plot_rolling_hrv(rr_intervals, window_size=300, step_size=5):
+    times, rmssd_values = rolling_rmssd(rr_intervals, window_size=300, step_size=5)
+    rmssd_df = pd.DataFrame({'Time (s)': times, 'RMSSD (ms)': rmssd_values})    
+    def seconds_to_english_time(seconds):
+        if seconds < 60:
+            # Less than 1 minute
+            seconds = seconds
+            parts = []
+            if seconds > 0:
+                parts.append(f"{seconds} Second")
+            return ' '.join(parts)
+        elif seconds < 3600:
+            # Less than 1 hour
+            minutes = seconds // 60
+            seconds = seconds % 60
+            parts = []
+            if minutes > 0:
+                parts.append(f"{minutes} Minute")
+            if seconds > 0:
+                parts.append(f"{seconds} Second")
+            return ' '.join(parts)
+        else:
+            # 1 hour or more
+            hours = seconds // 3600
+            remainder = seconds % 3600
+            minutes = remainder // 60
+            parts = []
+            if hours > 0:
+                parts.append(f"{hours} Hour")
+            if minutes > 0:
+                parts.append(f"{minutes} Minute")
+            return ' '.join(parts)
+        
+    fig = alt.Chart(rmssd_df).mark_line(point=True).encode(
+        x=alt.X('Time (s)', title='Time (s)'),
+        y=alt.Y('RMSSD (ms)', title='RMSSD (ms)'),
+        tooltip=['Time (s)', 'RMSSD (ms)']
+    ).properties(
+        title= f'Rolling RMSSD Every {seconds_to_english_time(step_size)} Over {seconds_to_english_time(window_size)} Windows'
+    ).interactive()
+
+    # Display the chart in Streamlit
+    st.title('Rolling RMSSD Over Time')
+    st.altair_chart(fig, use_container_width=True)
+
 def calculate_lf_hf_ratio(rr_intervals, fs):
     time = np.cumsum(rr_intervals) / 1000  # Convert RR intervals to seconds
     rr_interpolated = np.interp(np.arange(time[0], time[-1], 1/fs), time, rr_intervals)
@@ -44,24 +152,6 @@ def calculate_lf_hf_ratio(rr_intervals, fs):
     hf_power = np.trapezoid(psd[(freqs >= hf_band[0]) & (freqs < hf_band[1])], freqs[(freqs >= hf_band[0]) & (freqs < hf_band[1])])
     
     return lf_power, hf_power, lf_power / hf_power
-
-def calculate_pnn50(rr_intervals):
-    differences = np.abs(np.diff(rr_intervals))
-    count_nn50 = np.sum(differences > 50)  # Number of successive intervals that differ by more than 50 ms
-    pnn50 = (count_nn50 / len(differences)) * 100
-    return pnn50
-
-def calculate_sd1_sd2(rr_intervals):
-    sd1 = np.std(np.diff(rr_intervals) / np.sqrt(2))
-    sd2 = np.sqrt(2 * np.var(rr_intervals) - sd1**2)
-    return sd1, sd2
-
-def calculate_rmssd(rr_intervals):
-    diff_rr_intervals = np.diff(rr_intervals)
-    return np.sqrt(np.mean(diff_rr_intervals**2))
-
-def calculate_sdnn(rr_intervals):
-    return np.std(rr_intervals)
 
 def hr_chart(hr_data, age):
     max_hr = 220 - age
@@ -105,7 +195,7 @@ def hr_chart(hr_data, age):
     )
     st.plotly_chart(fig)
 
-def analyze_rr_session(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, start_time, end_time):
+def analyze_rr_session(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, start_time, end_time, window_size=60, step_size=5):
     avg_hr = np.mean(calculate_heart_rate(rr_intervals))
     hr_range = f"{np.round(np.min(calculate_heart_rate(rr_intervals)), 0)} - {np.round(np.max(calculate_heart_rate(rr_intervals)), 0)}"
     sd1, sd2 = calculate_sd1_sd2(rr_intervals)
@@ -113,6 +203,10 @@ def analyze_rr_session(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, start
     sdnn = calculate_sdnn(rr_intervals)
     pnn50 = calculate_pnn50(rr_intervals)
     lf_power, hf_power, lf_hf_ratio = calculate_lf_hf_ratio(rr_intervals, fs)
+    rmssd_summary = rolling_rmssd_summary(rolling_rmssd(rr_intervals, window_size, step_size)[1])
+    HRV_mean = rmssd_summary['mean']
+    HRV_median = rmssd_summary['50%']
+    HRV_range = f"{np.round(rmssd_summary['min'], 0)} - {np.round(rmssd_summary['max'], 0)}"
     
     # Determine sympathetic or parasympathetic state
     state = "Parasympathetic"
@@ -124,11 +218,14 @@ def analyze_rr_session(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, start
         "Time": f"{start_time} - {end_time}",
         "Avg HR (bpm)": np.round(avg_hr, 0),
         "HR Range": hr_range,
+        "HRV": np.round(rmssd, 0),
+        "SDNN": np.round(sdnn, 0),
+        "HRV_mean": np.round(HRV_mean, 0),         
+        "HRV_median": np.round(HRV_median, 0), 
+        "HRV_range": HRV_range,         
+        "pNN50 (%)": np.round(pnn50, 1),
         "SD1": np.round(sd1, 0),
         "SD2": np.round(sd2, 0),
-        "RMSSD": np.round(rmssd, 0),
-        "SDNN": np.round(sdnn, 0),
-        "pNN50 (%)": np.round(pnn50, 1),
         "LF Power": np.round(lf_power, 0),
         "HF Power": np.round(hf_power, 0),
         "LF/HF Ratio": np.round(lf_hf_ratio, 1),
@@ -136,7 +233,7 @@ def analyze_rr_session(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, start
     }
     return results
 
-def analyze_rr_chunks(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, chunk_duration= None):
+def analyze_rr_chunks(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, chunk_duration=None):
     results = []
     if chunk_duration:
         chunk_duration_secs = chunk_duration * 60  # Convert to seconds
@@ -147,7 +244,7 @@ def analyze_rr_chunks(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, chunk_
         for times in chunks:
             rr_intervals_chunks.append(rri_time_df[(rri_time_df.Time > times[0]) & (rri_time_df.Time <= times[1])].RRI.values.tolist())
         for i, chunk in enumerate(rr_intervals_chunks):
-            results.append(analyze_rr_session(chunk, fs, lf_hf_thresh, acute_lf_hf_thresh, start_time= i * chunk_duration, end_time= int(np.ceil(min((i + 1) * chunk_duration, sum(rr_intervals)/60000)))))
+            results.append(analyze_rr_session(chunk, fs, lf_hf_thresh, acute_lf_hf_thresh, start_time=i * chunk_duration, end_time=int(np.ceil(min((i + 1) * chunk_duration, sum(rr_intervals)/60000)))))
     return results
 
 def plot_hr_with_sympathetic(rr_intervals, results, chunks= False):
@@ -199,17 +296,6 @@ def plot_hr_with_sympathetic(rr_intervals, results, chunks= False):
     # Display the chart in Streamlit
     st.altair_chart(chart, use_container_width=True)
 
-def session_analysis(file_path, chunk_duration= None, fs=4, lf_hf_thresh=1.8, acute_lf_hf_thresh=3., start_time= 0, end_time= None):
-    rr_intervals = load_rr_intervals(file_path)
-    if not end_time:
-        end_time= sum(rr_intervals)/60000
-    analysis_results = analyze_rr_session(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, start_time, end_time)
-    print(f"Full session analysis: \n{analysis_results}\n")
-    if chunk_duration:
-        chunk_analysis = analyze_rr_chunks(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, chunk_duration=chunk_duration)
-        print(f"Analysis of chunks analysis: \n{pd.DataFrame(chunk_analysis)}\n")
-        plot_hr_with_sympathetic(rr_intervals, chunk_analysis)
-
 def openai_response(prompt, model = "gpt-4o"):
     client = OpenAI(api_key= openai_api_key.replace('"',''))
     response = client.chat.completions.create(
@@ -236,8 +322,10 @@ def main():
             acute_lf_hf_thresh = 3.0
             end_time = int(np.ceil(sum(rr_intervals)/60000))
             analysis_results = analyze_rr_session(rr_intervals, fs, lf_hf_thresh, acute_lf_hf_thresh, 0, end_time)
+            st.write("Analysis Results:")
             for i,j in analysis_results.items(): st.write(f"{i}: {j}")
             plot_hr_with_sympathetic(rr_intervals, analysis_results, False)
+            plot_rolling_hrv(rr_intervals, window_size= 300, step_size= 5)
 
             # Step 2: Get chunk duration from the user
             chunk_duration = st.number_input("Enter chunk duration (minutes)", min_value=1, max_value=60, value=5)
@@ -256,14 +344,20 @@ def main():
                 for i, row in enumerate(results):
                     lf = row['LF Power']
                     hf = row['HF Power']
-                    time = row['Time']
+                    lf_hf_ratio = np.round(lf/hf, 2)
+                    HRV_mean = row["HRV_mean"]
+                    HRV_median = row["HRV_median"]
+                    HRV_range = row["HRV_range"]                    
                     prompt = f"""
-                    Here are the LF and HF and LF/HF ratio from the Frequency Domain Analysis of the RR Intervals for a session: {lf, hf, lf/hf}
-                    Based on this data, please provide a layman-friendly explanation of what this means and whether they're in a relaxed or stressed situation and the impact this has on decision making. I define a sympathetic state as one with a lf/hf ratio above 1.8 and an LF/HF ratio above 3 to be in acute sympathetic state. If they're in a sympathetic state, give a quick tip on how to bring themselves back into a parasympathetic state. Respond in one paragraph, avoiding technical jargon.
-                    Do not explicitly call out the threshold values I provided. And address the reader as 'you'. Do not start with 'Based on the provided data' or similar
+                    Here are the LF and HF and lf_hf_ratio from the Frequency Domain Analysis as well as the HRV_mean, HRV_median and HRV_range of the RR Intervals for a session: 
+                    lf:{lf}, lf:{hf}, lf:{lf_hf_ratio}, lf:{HRV_mean}, lf:{HRV_median}, lf:{HRV_range}. 
+                    Based on this data, please provide a layman-friendly explanation of what this means and whether they're in a relaxed or stressed situation and the impact this has on decision making. 
+                    I define a sympathetic state as one with a lf/hf ratio above 1.8 and an LF/HF ratio above 3 to be in acute sympathetic state. 
+                    If they're in a sympathetic state, give a quick tip on how to bring themselves back into a parasympathetic state. 
+                    Respond in one paragraph, avoiding technical jargon and calling out any of the metrics and their values explicitly.
+                    Do not explicitly call out the threshold values I provided. And address the reader as 'you'. Do not start with 'Based on the provided data', 'from the session data' or similar. 
                     """
                     for i,j in row.items():
-                        print(i, j)
                         st.write(f"{i}: {j}")
                     st.write(f"Analysis: \n{openai_response(prompt)}\n")
                 
